@@ -8,6 +8,7 @@
 % https://se.mathworks.com/help/phased/ug/local-and-global-coordinate-systems-example-in-radar.html
 %% Clean up
 clc; clear;
+format long;
 
 %% Constants
 f = 2.4e9;                                                               %Carrier frequency of signal [Hz]
@@ -59,13 +60,6 @@ arrayPos = getElementPosition(arrayRX);
 transmitter = phased.Transmitter('PeakPower',1000.0,'Gain',40);            % Output power and antenna gain - USED THE ONE FROM EXAMPLE
 channel = phased.FreeSpace('OperatingFrequency', f);                       % Used for signal propagation from one point to another
 
-
-%Signal - phasor
-fs = 2*f;
-t = 0:2e-6:(160-2)*1e-6;
-Nsamples = length(t);
-s = exp(j*2*pi*f*t);
-
 %% Simulation loop
 stepsize = 0.1;
 N = 3*(1/stepsize)                                                         %number of steps
@@ -84,7 +78,16 @@ r = arrayPos;
 K = @(azi, el) 2*pi*(1/lambda)*[sind(azi)*cosd(el); sind(azi)*sind(el); cosd(azi)];
 a = @(r,k) exp(-j*r'*k);
 
-signal = zeros(1,Nsamples);
+%Signal to be transmitted - phasor
+fs = 2*f;
+t = 0:2e-6:(160-2)*1e-6;
+Nsamples = length(t);
+s = exp(j*2*pi*f*t);
+
+signal = zeros(1,Nsamples); %transmitted signal - empty vector
+
+
+
 for t = 1:N+1
     timesteps(t) = t;
     
@@ -97,7 +100,7 @@ for t = 1:N+1
     initVel = uavVel;
     uavSignalPlatform = phased.Platform('MotionModel','Acceleration','InitialPosition', initPos, 'InitialVelocity', initVel,...
                                 'InitialOrientationAxes', uavOrientation, 'InitialOrientationAxes', uavOrientation);
-    for i=1:80
+    for i=1:80 %80 samples
         [pos, ~] = uavSignalPlatform(i*(1e-6));
         sample = transmitter(s(i));
         sample = channel(sample,pos,phasedArrayPos,...
