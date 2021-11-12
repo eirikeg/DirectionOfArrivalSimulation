@@ -10,44 +10,30 @@
 clc; clear;
 
 %% Constants
-fc = 5.8e9;                                                               %Carrier frequency of signal [Hz]
+f = 2.4e9;                                                               %Carrier frequency of signal [Hz]
 c = physconst('LightSpeed'); 
-lambda = c/fc;                                                            %wavelength [m]
+lambda = c/f;                                                            %wavelength [m]
 
 %% Create antenna element on UAV, platform and radiator
 antenna = phased.IsotropicAntennaElement;
 antennaTX = antenna;
 
-%%%
-%TRAJECTORY TO BE CHANGED... Figure out how to generate a feasible
-%trajectory.
-%%%
-%trajectory specification for UAV - from example:  https://se.mathworks.com/help/phased/ref/phased.platform-system-object.html
-%piecewise cubic interpolation on the waypoints to derive the position and velocity at each time step
+%TRAJECTORY for UAV
+t = [0:200:800];
+xPoints = [400;4000;4000; 1000; 0]';
+yPoints = [300; 1000; 4000; 4000; 10]';
+zPoints = [0;500; 1000; 500; 0]';
 
-x0 = 5;
-y0 = 0;
-z0 = 0;
-vx = 5;
-vy = 10;
-vz = 0;
-ax = 1;
-ay = -1;
-
-t = [0:10];
-x = x0 + vx*t + ax/2*t.^2;
-y = y0 + vy*t + ay/2*t.^2;
-z = z0 + t;
-waypoints = [t.' x.' y.' z.'];
+waypoints = [t.' xPoints.' yPoints.' zPoints.'];
 
 
-antennaOrientation = roty(0);
+antennaOrientation = rotz(0);
 UAV = phased.Platform('MotionModel','Custom','CustomTrajectory',waypoints,...
                                 'InitialOrientationAxes', antennaOrientation,...
                                 'OrientationAxesOutputPort',true);
                             
 radiator = phased.Radiator('Sensor',antennaTX,'PropagationSpeed',c,...     %Narrowband signal radiator: COnverts signal into radiated wave fields
-    'WeightsInputPort',false,'OperatingFrequency',fc);
+    'WeightsInputPort',false,'OperatingFrequency',f);
 
 
 %% Create stationary phased array antenna ground station
@@ -56,98 +42,120 @@ radiator = phased.Radiator('Sensor',antennaTX,'PropagationSpeed',c,...     %Narr
 initPosPARS = [0,0,0]';                                                    %Initial position [m]
 initVelPARS = [0,0,0]';                                                    %Inital velocity [m]
 
+Mx = 3;
+My = 3;
+
 arrayOrientation = rotz(0);
-arrayRX = phased.URA('Element', antenna, 'Size', [10,10], 'ElementSpacing',...
-                    [lambda/2, lambda/2]);                                 %spacing is chosen to avoid spacial aliasing
+arrayRX = phased.URA('Element', antenna, 'Size', [Mx,My], 'ElementSpacing',...
+                    [lambda/2, lambda/2], 'ArrayNormal', 'z');                                 %spacing is chosen to avoid spacial aliasing
                 
 phasedArray = phased.Platform('InitialPosition', initPosPARS, 'Velocity', initVelPARS,...
                                 'InitialOrientationAxes', arrayOrientation,...
                                 'OrientationAxesOutputPort',true);
 
+arrayPos = getElementPosition(arrayRX);
 %% Transmitter, freeSpace channel, signal
 
 transmitter = phased.Transmitter('PeakPower',1000.0,'Gain',40);            % Output power and antenna gain - USED THE ONE FROM EXAMPLE
-channel = phased.FreeSpace('OperatingFrequency', fc);                      % Used for signal propagation from one point to another
+channel = phased.FreeSpace('OperatingFrequency', f);                       % Used for signal propagation from one point to another
 
 
-%%%
-%UNSURE ABOUT HOW TO GENERATE SIGNAL? IS A SIMPLE SINEWAVE CORRECT?
-%%%
-tau = 100e-6;                                                              %Pulsewidth
-prf = 5000;                                                                %Pulse repetition frequency
-fs = 1e6;                                                                  %sample rate [Hz]
-waveform = phased.LinearFMWaveform('PulseWidth',tau,...                    %signal waveform
-    'OutputFormat','Pulses','NumPulses',1,'PRF',prf,'SampleRate',fs);
-
-
-%Complex sine wave
- dt = 1e-11;
- t = 0:dt:(100*dt);
- w = 5.8e9*2*pi;
- xx = exp(j*w*t);
-
-%% DOA estimator - MUSIC
-% 
-% estimator = phased.MUSICEstimator2D('SensorArray', arrayRX, 'OperatingFrequency',fc,...
-%     'NumSignalsSource','Property',...
-%     'DOAOutputPort',true,'NumSignals',1,...
-%     'AzimuthScanAngles',-90:1:90,...
-%     'ElevationScanAngles',-40:1:40);
+%Signal - phasor
+fs = 2*f;
+t = 0:2e-6:(160-2)*1e-6;
+Nsamples = length(t);
+s = exp(j*2*pi*f*t);
 
 %% Simulation loop
-stepsize = 0.25;
-N = 40;                                                                    %number of steps
+stepsize = 0.1;
+N = 3*(1/stepsize)                                                         %number of steps
 
 azimuth = zeros(1,N);                                                      %Allocate memory for storing data
 elevation = zeros(1,N);
-% azimuthDOA = zeros(1,N);
-% elevationDOA = zeros(1,N);
+azimuthDOA = zeros(1,N);
+elevationDOA = zeros(1,N);
 uavPosition = zeros(3,N);
 arrayPosition = zeros(3,N);
 timesteps = zeros(1,N);
+uavVelocity = zeros(3,N);
+ranges = zeros(1,N);
 
+r = arrayPos;
+K = @(azi, el) 2*pi*(1/lambda)*[sind(azi)*cosd(el); sind(azi)*sind(el); cosd(azi)];
+a = @(r,k) exp(-j*r'*k);
+
+signal = zeros(1,Nsamples);
 for t = 1:N+1
     timesteps(t) = t;
-    [uavPos ,uavVel] = UAV(stepsize);
+    
+    [uavPos ,uavVel, uavOrientation] = UAV(stepsize);
     [phasedArrayPos ,phasedArrayVel] = phasedArray(stepsize);
+
+    %TRASMIT SIGNAL
+    %Create UAV signal platform transmitting signal for 160 microseconds
+    initPos = uavPos-((160e-6)*uavVel); 
+    initVel = uavVel;
+    uavSignalPlatform = phased.Platform('MotionModel','Acceleration','InitialPosition', initPos, 'InitialVelocity', initVel,...
+                                'InitialOrientationAxes', uavOrientation, 'InitialOrientationAxes', uavOrientation);
+    for i=1:80
+        [pos, ~] = uavSignalPlatform(i*(1e-6));
+        sample = transmitter(s(i));
+        sample = channel(sample,pos,phasedArrayPos,...
+                                    uavVel,phasedArrayVel);
+        signal(i) = sample;
+        
+    end
+    %END OF SIGNAL TRANSMISSION
     
-    [range,angles] = rangeangle(uavPos, phasedArrayPos, arrayOrientation); %get true propagation path angles and range with respect to the phased array
     
-    azimuth(t) = angles(1);                                                %store true azimuth and elevation angle
+    %get true propagation path angles and range with respect to the phased array
+    [range,angles] = rangeangle(uavPos, phasedArrayPos, arrayOrientation);
+    
+    %Store values
+    ranges(t) = range;
+    azimuth(t) = angles(1);                                                
     elevation(t) = angles(2);
     uavPosition(:,t) = uavPos';
     arrayPosition(:,t) = phasedArrayPos';
+    uavVelocity(:,t) = uavVel;
     
-    signal = xx';                                                          %signal to be transmitted
-    radiatedSignal = radiator(signal, angles);
-    porpagatedSignal = channel(radiatedSignal,uavPos,phasedArrayPos,...
-                                uavVel,phasedArrayVel);
-                            
-    collectedSignal = collectPlaneWave(arrayRX, porpagatedSignal,...
-                                       angles, fc);
-%     Run DOA algorithm
-%     [~,doas] = estimator(collectedSignal);                                 %DoA Estimation
-%     azimuthDOA(t) = doas(1);                                               %Store doa estimates for comparisons
-%     elevationDOA(t) = doas(2);
+    %RECIEVED SIGNAL
+    k = K(azimuth(t), elevation(t));    %wavevector
+
+    x = a(r,k)*signal;  
+    x = awgn(x, 20);                    %Add gaussian white noise 
     
+    %DOA ESTIMATE
+    [DOA] = MUSIC(r,x,1,lambda,1);
+%     DOA=PDDA(arrayPos, x, 1, lambda, 1);
+%     DOA = MVDR(r,x,1,lambda,1);
+    
+    azimuthDOA(t) = DOA(1);
+    elevationDOA(t) = DOA(2);
+%                                    
 end
 
 %% Plot
 
-figure
-plot(timesteps, azimuth,'r');
-grid on;
-hold on;
-% plot(timesteps, azimuthDOA,'ro');
-plot(timesteps, elevation, 'b');
-% plot(timesteps, elevationDOA,'bo');
-% legend('azimuth', 'azimuthDOA', 'elevation', 'elevationDOA');
-legend('azimuth','elevation');
+timesteps = timesteps*0.1;
 
 figure
-plot3(x,y,z,'o'); 
+plot(timesteps, azimuth,'b', 'LineWidth', 2);
+grid on;
+hold on;
+plot(timesteps, azimuthDOA,'r.');
+plot(timesteps, elevation, 'y', 'LineWidth', 2);
+plot(timesteps, elevationDOA,'k.');
+legend('azimuth', 'azimuthDOA', 'elevation', 'elevationDOA');
+% 
+figure
+plot3(xPoints,yPoints,zPoints,'o'); 
 hold on;
 grid on;
 plot3(uavPosition(1,:), uavPosition(2,:), uavPosition(3,:));
-plot3(0,0,0,'ro')
+xlabel('x [m]');
+ylabel('y [m]');
+zlabel('z [m]');
+plot3(0,0,0,'ro');
+                 
 
