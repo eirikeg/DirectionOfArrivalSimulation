@@ -20,10 +20,10 @@ antenna = phased.IsotropicAntennaElement;
 antennaTX = antenna;
 
 %TRAJECTORY for UAV
-t = [0:200:800];
-xPoints = [400;4000;4000; 1000; 0]';
-yPoints = [300; 1000; 4000; 4000; 10]';
-zPoints = [0;500; 1000; 500; 0]';
+t = [0:20:80];
+xPoints = [10;400;400; 100; 0]';
+yPoints = [10; 100; 400; 400; 10]';
+zPoints = [0;500; 100; 50; 0]';
 
 waypoints = [t.' xPoints.' yPoints.' zPoints.'];
 
@@ -55,14 +55,16 @@ phasedArray = phased.Platform('InitialPosition', initPosPARS, 'Velocity', initVe
                                 'OrientationAxesOutputPort',true);
 
 arrayPos = getElementPosition(arrayRX);
-%% Transmitter, freeSpace channel, signal
+%% Transmitter and FreeSpace channel
 
-transmitter = phased.Transmitter('PeakPower',1000.0,'Gain',40);            % Output power and antenna gain - USED THE ONE FROM EXAMPLE
+transmitter = phased.Transmitter('PeakPower',100e-3,'Gain',10);            % Output power and antenna gain - USED THE ONE FROM EXAMPLE
 channel = phased.FreeSpace('OperatingFrequency', f);                       % Used for signal propagation from one point to another
 
 %% Simulation loop
-stepsize = 0.1;
-N = 3*(1/stepsize)                                                         %number of steps
+stepSize = 0.1;                                                            %Step size outer loop
+stepSizeSignal = 160e-6;                                                   %Step size for sampling signal
+N = 80*(1/stepSize)                                                        %number of step
+
 
 azimuth = zeros(1,N);                                                      %Allocate memory for storing data
 elevation = zeros(1,N);
@@ -84,34 +86,31 @@ t = 0:2e-6:(160-2)*1e-6;
 Nsamples = length(t);
 s = exp(j*2*pi*f*t);
 
-signal = zeros(1,Nsamples); %transmitted signal - empty vector
-
+M = Mx*My;                  %Number of antenna elements
+signal = zeros(M,Nsamples); %transmitted signal - empty vector
 
 
 for t = 1:N+1
     timesteps(t) = t;
     
-    [uavPos ,uavVel, uavOrientation] = UAV(stepsize);
-    [phasedArrayPos ,phasedArrayVel] = phasedArray(stepsize);
+    [uavPos ,uavVel, uavOrientation] = UAV(stepSize-stepSizeSignal);
+    [phasedArrayPos ,phasedArrayVel] = phasedArray(stepSizeSignal);
 
     %TRASMIT SIGNAL
-    %Create UAV signal platform transmitting signal for 160 microseconds
-    initPos = uavPos-((160e-6)*uavVel); 
-    initVel = uavVel;
-    uavSignalPlatform = phased.Platform('MotionModel','Acceleration','InitialPosition', initPos, 'InitialVelocity', initVel,...
-                                'InitialOrientationAxes', uavOrientation, 'InitialOrientationAxes', uavOrientation);
     for i=1:80 %80 samples
-        [pos, ~] = uavSignalPlatform(i*(1e-6));
+        [pos, ~] = UAV(i*(2e-6));
+        [~,ang] = rangeangle(pos, phasedArrayPos, arrayOrientation);
         sample = transmitter(s(i));
         sample = channel(sample,pos,phasedArrayPos,...
                                     uavVel,phasedArrayVel);
-        signal(i) = sample;
-        
+        k = K(ang(1), ang(2));    %wavevector
+        sample = a(r,k)*sample; 
+        signal(:,i) = awgn(sample, 20);
     end
     %END OF SIGNAL TRANSMISSION
     
     
-    %get true propagation path angles and range with respect to the phased array
+    %get true propagation path angles and range w.r.t the phased array
     [range,angles] = rangeangle(uavPos, phasedArrayPos, arrayOrientation);
     
     %Store values
@@ -124,14 +123,11 @@ for t = 1:N+1
     
     %RECIEVED SIGNAL
     k = K(azimuth(t), elevation(t));    %wavevector
-
-    x = a(r,k)*signal;  
-    x = awgn(x, 20);                    %Add gaussian white noise 
     
     %DOA ESTIMATE
-    [DOA] = MUSIC(r,x,1,lambda,1);
-%     DOA=PDDA(arrayPos, x, 1, lambda, 1);
-%     DOA = MVDR(r,x,1,lambda,1);
+    [DOA] = MUSIC(r,signal,1,lambda,1);
+% %     DOA=PDDA(arrayPos, x, 1, lambda, 1);
+% %     DOA = MVDR(r,signal,1,lambda,1);
     
     azimuthDOA(t) = DOA(1);
     elevationDOA(t) = DOA(2);
@@ -139,7 +135,6 @@ for t = 1:N+1
 end
 
 %% Plot
-
 timesteps = timesteps*0.1;
 
 figure
@@ -160,5 +155,7 @@ xlabel('x [m]');
 ylabel('y [m]');
 zlabel('z [m]');
 plot3(0,0,0,'ro');
-                 
+for i = 1:3
+    quiver3(0,0,0,arrayOrientation(1,i)*1000,arrayOrientation(2,i)*1000,arrayOrientation(3,i)*1000);
+end
 
