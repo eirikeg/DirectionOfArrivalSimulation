@@ -16,9 +16,13 @@ function [DOA] = PDDA(arrayPos, x, d, lambda, searchStep)
     epsilon = 0.01;                     %Scalar to avoid singularities
 
     r = arrayPos;                                           %Position of antenna elements
-    K = @(azi, el) 2*pi*(1/lambda)*[sind(azi)*cosd(el);...  %Wave vector
-               sind(azi)*sind(el); cosd(azi)];
-    a = @(r,k) exp(-j*r'*k);                                %Steering vector    
+    K = @(azi, el) 2*pi*(1/lambda)*[sind(el)*cosd(azi);...  %Wave vector
+               sind(azi)*sind(el); cosd(el)];
+    a = @(r,k) exp(-j*r'*k);                                %Steering vector  
+    
+%     a = @(az, el) exp( -1i*2*pi*( Rzyx(0,0,deg2rad(az))*Rzyx(0,deg2rad(el),0)*[0 0 1]' )'*r/lambda )';
+
+
 
     N = length(x(1,:));                                     %Number of samples
 
@@ -29,10 +33,13 @@ function [DOA] = PDDA(arrayPos, x, d, lambda, searchStep)
     e = [1 p]';                                             %Add unit to the first row representing correlation with itself
     
     
-    thetaSearch = 0:searchStep:180;
-    phiSearch = 0:searchStep:90;
-    P = zeros(length(phiSearch),length(thetaSearch));
-    peakIdx = [1000;1000];
+    phiSearch = 1:searchStep:360;
+    thetaSearch = 1:searchStep:90;
+    phiLength = length(phiSearch);
+    thetaLength = length(thetaSearch);
+    peak_val = 0;
+    peak_idx = [inf;inf];
+    P = zeros(phiLength,thetaLength);
     w = -1e11;                                              %Max value in pseudospectrum
     for theta = 1:length(thetaSearch)
         for phi = 1:length(phiSearch)
@@ -48,12 +55,11 @@ function [DOA] = PDDA(arrayPos, x, d, lambda, searchStep)
     Ps = w-P;                                               %Subtract global maximum from other points - makes us obtain nulls in DOA of incomming signals
     Ppdda = (Ps+epsilon).^(-1);                             %Pseudospectrum of PDDA
         
-    DOA = peakIdx;
+    DOA = peakIdx*searchStep;
     
     w = max(Ppdda,[],'all');
     
-    
-%     mesh(thetaSearch,phiSearch,abs(Ppdda)/abs(w));        %Plot pseudospectrum
+    mesh(thetaSearch,phiSearch,abs(Ppdda)/abs(w));        %Plot pseudospectrum
 %     grid on;
     
     

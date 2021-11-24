@@ -13,8 +13,8 @@ if nargin < 5
 end
 
 r = arrayPos;                                           %Position of antenna elements
-K = @(azi, el) 2*pi*(1/lambda)*[sind(azi)*cosd(el);...  %Wave vector
-               sind(azi)*sind(el); cosd(azi)];
+K = @(azi, el) 2*pi*(1/lambda)*[sind(el)*cosd(azi);...  %Wave vector
+               sind(azi)*sind(el); cosd(el)];
 a = @(r,k) exp(-j*r'*k);                                %Steering vector    
 
 N = length(x(1,:));                                     %Number of samples
@@ -28,27 +28,33 @@ eigVector = V(:,index);                                 %Sort corresponding eige
 noiseSub = V(:, d+1:end);                               %Estimated noise subspace
 
 %Search through MUSIC pseudospectrum
-phiSearch = -90:searchStep:90;
-thetaSearch = -90:searchStep:90;
-peak_val = 0;
-peak_idx = [1000;1000];
-p = zeros(181,181);
-for phi = 1:length(phiSearch)
-    for theta = 1:length(thetaSearch)
-        k = K(thetaSearch(theta),phiSearch(phi));
+phiSearch = 1:searchStep:360;
+thetaSearch = 1:searchStep:90;
+phiLength = length(phiSearch);
+thetaLength = length(thetaSearch);
+peakVal = 0;
+peakIdx = [inf;inf];
+P = zeros(phiLength,thetaLength);
+w = -1e11;                                              %Max value in pseudospectrum
+for theta = 1:length(thetaSearch)
+    for phi = 1:length(phiSearch)
+        k = K(phi,theta);
         aa = a(r,k);
-        p(theta,phi) = 1/(aa'*noiseSub*noiseSub'*aa);  
-        if abs(p(theta,phi)) > peak_val
-            peak_val = abs(p(theta,phi));
-            peak_idx = [theta;phi];
+        P(phi,theta) = 1/(aa'*noiseSub*noiseSub'*aa);                %Pseudospectrum
+        if P(phi,theta) > peakVal
+            peakVal = (P(phi,theta));
+            peakIdx = [phi,theta];
         end
     end
 end
 
-DOA = peak_idx-90;
+DOA = (peakIdx*searchStep);
 
-% mesh(phiSearch,thetaSearch,abs(p)/abs(peak_val))    %Plot spectrum
-% % colorbar;
+mesh(thetaSearch,phiSearch,abs(P)/abs(peakVal))    %Plot spectrum
+xlabel('\phi [deg]');
+ylabel('\theta [deg]');
+zlabel('Normalized Power')
+colorbar;
 % % close all;
 
 end
